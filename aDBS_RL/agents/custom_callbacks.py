@@ -7,6 +7,7 @@ import gymnasium
 import warnings
 from typing import Any, Callable, Optional, Union
 from scipy.signal import filtfilt
+from tqdm.std import tqdm
 
 from stable_baselines3.common.callbacks import BaseCallback, EventCallback
 from stable_baselines3.common.logger import Figure
@@ -15,6 +16,21 @@ from stable_baselines3.common.vec_env import (
     DummyVecEnv, VecEnv, VecMonitor,
     is_vecenv_wrapped,
     sync_envs_normalization)
+
+
+class TextProgressBarCallback(BaseCallback):
+    """Display training progress as plain text instead of a notebook widget."""
+
+    def _on_training_start(self) -> None:
+        total_timesteps = self.locals["total_timesteps"] - self.model.num_timesteps
+        self.progress_bar = tqdm(total=total_timesteps, desc="Training", unit="step")
+
+    def _on_step(self) -> bool:
+        self.progress_bar.update(self.training_env.num_envs)
+        return True
+
+    def _on_training_end(self) -> None:
+        self.progress_bar.close()
 
 
 class TensorboardCallback(BaseCallback):
@@ -69,15 +85,14 @@ class TensorboardCallback(BaseCallback):
 
     def log_lfp_env(self, sig, current_time):
         n = sig.shape[0]
-        nn = self.reference_lfp.shape[0]
-        if nn >= n:
-            nn = n
         sig_filt, _ = band_pass_envelope(sig, 1/self.psd_dt, order=2)
         times = np.arange(current_time-self.psd_dt*n, current_time, self.psd_dt)[:n]
 
         fig, ax = plt.subplots(1, 1, figsize=(14, 3), dpi=150)
-        ax.plot(times[:nn], self.reference_lfp[:nn], label='LFP no DBS', alpha=0.3)
-        ax.plot(times[:nn], sig_filt[:nn], label='LFP with DBS')
+        if self.reference_lfp is not None:
+            nn = min(n, self.reference_lfp.shape[0])
+            ax.plot(times[:nn], self.reference_lfp[:nn], label='LFP no DBS', alpha=0.3)
+        ax.plot(times, sig_filt, label='LFP with DBS')
         ax.axhline(0, linestyle='--', c='grey',)
         ax.set_title(f'LFP Amplitude, beta-filt')
         ax.set_xlabel('Time, [counts]')
@@ -110,6 +125,7 @@ class TensorboardCallback(BaseCallback):
         self.step_len_sec = units2sec(self.training_env.get_attr('params_dict')[0]['electrode_width']) +\
                             units2sec(self.training_env.get_attr('params_dict')[0]['electrode_pause'])
         # for plotting
+        self.reference_lfp = None
         if os.path.isfile('data/reference_fileterd_lfp.npy'):
             self.reference_lfp = np.load('data/reference_fileterd_lfp.npy')
             sig_filt_R, _ = band_pass_envelope(self.reference_lfp, 1/self.psd_dt, order=2)
@@ -305,6 +321,7 @@ class EvalCallback_(EventCallback):
         self.log_env_num = 0  # we will save actual signal only from 1 env
 
         # for plotting
+        self.reference_lfp = None
         if os.path.isfile('data/reference_fileterd_lfp.npy'):
             self.reference_lfp = np.load('data/reference_fileterd_lfp.npy')
             sig_filt_R, _ = band_pass_envelope(self.reference_lfp, 1/self.psd_dt, order=2)
@@ -400,14 +417,13 @@ class EvalCallback_(EventCallback):
 
     def log_lfp_env(self, sig, current_time):
         n = sig.shape[0]
-        nn = self.reference_lfp.shape[0]
-        if nn >= n:
-            nn = n
         sig_filt, _ = band_pass_envelope(sig, 1/self.psd_dt, order=2)
         times = np.arange(current_time-self.psd_dt*n, current_time, self.psd_dt)[:n]
 
         fig, ax = plt.subplots(1, 1, figsize=(14, 3), dpi=150)
-        ax.plot(times[:nn], self.reference_lfp[:nn], label='LFP no DBS', alpha=0.3)
+        if self.reference_lfp is not None:
+            nn = min(n, self.reference_lfp.shape[0])
+            ax.plot(times[:nn], self.reference_lfp[:nn], label='LFP no DBS', alpha=0.3)
         ax.plot(times, sig_filt, label='LFP with DBS')
         ax.axhline(0, linestyle='--', c='grey',)
         ax.set_title(f'LFP Amplitude, beta-filt')
